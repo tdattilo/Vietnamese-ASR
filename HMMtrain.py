@@ -11,7 +11,7 @@ give each node in the graph a corresponding custom ARPAbet-analogue observable
 value. The observable states list for each node is sparse - one entry of probability 1
 and the rest with probability 0.
 """
-
+from __future__ import division
 import string
 import pickle
 import math
@@ -172,31 +172,59 @@ class HMM:
 		for word in self.allwords:
 			if not (word=="<s>") and not (word=="</s>"):
 				self.wordvalues.update({word:alphaToArpa(word)})
+		self.wordvalues.update({"<s>":""})
+		self.wordvalues.update({"</s>":""})
 		self.size=len(self.allwords)
 		runningtotal=0.0
-		self.bigrammodel=np.zeros((self.size, self.size), dtype=float32)
+		self.bigrammodel=np.zeros((self.size, self.size))
 		for number in range(1, len(trainingtext)):
 			if not (trainingtext[number].lower() == "<s>"):
 				self.bigrammodel[self.allwords.index(trainingtext[number].lower())][self.allwords.index(trainingtext[number+1].lower())]+=1
 				runningtotal+=1.0
-		bigrammodel=bigrammodel/runningtotal
+		self.bigrammodel=self.bigrammodel/runningtotal
+
 	def getViterbi(self, soundstring):
-		viterbi=np.zeros((self.size, len(soundstring)), dtype=int)
-		backpointer=np.zeros((self.size, len(soundstring)), dtype=int)
+		viterbi=np.zeros((self.size, len(soundstring)))
+		backpointer=np.zeros((self.size, len(soundstring)))
 		obsmultiplier=0.
-		for number in size:
+		for number in range(1, self.size):
 			if soundstring[0]==self.wordvalues[self.allwords[number]]:
 				obsmultiplier = 1.
 			viterbi[number][0]=self.bigrammodel[0][number]*obsmultiplier
-		for time in range(1, len(soundstring)):
+		for time in range(1, len(soundstring)-1):
+			print(time)
 			obsmultiplier=0.
 			for state in range(0, self.size):
 				if soundstring[time]==self.wordvalues[self.allwords[state]]:
 					obsmultiplier = 1.
 				viterbi[state][time]=max(viterbi[earlystate][time-1]*self.bigrammodel[earlystate][state]*obsmultiplier for earlystate in range(0, self.size))
-				backpointer[state][time]=np.argmax(viterbi*bigrammodel, axis=1)[time-1]
-		viterbi[self.size][len(soundstring)]=max(viterbi[state][len(soundstring)]*bigram[state][len(soundstring)]
-		backpointer[self.size][len(soundstring)]=argmax(viterbi*bigrammodel, axis=1)[len(soundstring)]
-		return backpointer
+				argmax=0
+				maxholder=0
+				for earlystate in range(0, self.size):
+					if maxholder<viterbi[earlystate][time-1]*self.bigrammodel[earlystate][state]:
+						argmax=earlystate
+						maxholder=viterbi[earlystate][time-1]*self.bigrammodel[earlystate][state]
+				backpointer[state][time]=argmax
+		viterbi[self.size-1][len(soundstring)-1]=max(viterbi[state][len(soundstring)-1]*self.bigrammodel[state][len(soundstring)-1] for state in range(0, self.size))
+		argmax=0
+		maxholder=0
+		for earlystate in range(0, self.size):
+			if maxholder<viterbi[earlystate][len(soundstring)-1]*self.bigrammodel[earlystate][self.size-2]:
+				argmax=earlystate
+				maxholder=viterbi[earlystate][len(soundstring)-1]*self.bigrammodel[earlystate][self.size-2]
+		print(argmax)
+		backpointer[self.size-1][len(soundstring)-1]=argmax
+		state=self.size-1
+		"""
+		for word in range(len(soundstring)-1, 0, -1):
+			translatestring = backpointer[
+		"""		
+		translatestring=""
+		return translatestring
 
 hmmtrained = HMM()
+testValue="Vở kịch do đạo"
+testValue=testValue.split()
+for word in range(0, len(testValue)):
+	testValue[word]=alphaToArpa(testValue[word].lower())
+print(hmmtrained.getViterbi(testValue))
