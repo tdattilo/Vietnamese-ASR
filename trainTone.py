@@ -1,138 +1,67 @@
-from __future__ import absolute_import
-from __future__ import division
+from typing import Callable, Tuple
 
-import string
-import re
-import pickle
-import tensorflow as tf
+import amfm_decompy.basic_tools as basic
+import amfm_decompy.pYAAPT as pYAAPT
 import numpy as np
-import random
-import sys
-import os.path
-import math
-from tensorflow.python.ops import io_ops
-from tensorflow.contrib.framework.python.ops import audio_ops as contrib_audio
+import pandas as pd
+import pitch
+import tensorflow as tf
 
-def load_wav_file(filename): #Taken from input_data.py, packaged with tensorflow
-	with tf.Session(graph=tf.Graph()) as sess:
-		wav_filename_placeholder = tf.placeholder(tf.string, [])
-		wav_loader = io_ops.read_file(wav_filename_placeholder)
-		wav_decoder = contrib_audio.decode_wav(wav_loader, desired_channels=1)
-		
-		return sess.run(wav_decoder, feed_dict={wav_filename_placeholder: filename}).audio.flatten()
-		
-def getMFCC(filename): #Modified from input_data.py, packaged with tensorflow
-	with tf.Session(graph=tf.Graph()) as sess:
-		wav_filename_placeholder = tf.placeholder(tf.string, [])
-		wav_loader = io_ops.read_file(wav_filename_placeholder)
-		wav_decoder = contrib_audio.decode_wav(wav_loader, desired_channels=1)
-		spectrogram = contrib_audio.audio_spectrogram(
-			wav_decoder.audio,
-			window_size=550,
-			stride=number_cells,
-			magnitude_squared=True)
-		mfcc = contrib_audio.mfcc(
-			spectrogram, 44100, dct_coefficient_count=20)
-		return sess.run(mfcc, feed_dict={wav_filename_placeholder: filename})
+def get_tone_digit(tone_list: dict) -> int:
+    for key, value in tone_list.items():
+        if value == 1:
+            return int(key[-1])
 
-def save_wav_file(filename, wav_data, sample_rate):
-  """Saves audio sample data to a .wav audio file.
+f0_df = pd.DataFrame()
+for val in range(0, 3108):
+    signal = basic.SignalObj('/home/dattilo/Documents/Project/Data Sources/Audio2-0/Audio2-' + str(val+1).zfill(2) + '.wav')
+    pitchY = pYAAPT.yaapt(signal, frame_length=40, tda_frame_length=40, f0_min=75, f0_max=600)# YIN pitches
+    f0_df = f0_df.append(pd.DataFrame([[val] + pitchY.samp_values.tolist()]))
+text_df = pd.read_csv('/home/dattilo/Documents/Project/Data Sources/truyenkieuwordnumber.txt', sep=' ', names=['index', 'word'])
+text_df['tone_2'] = (text_df['word'].str.contains('á|é|í|ó|ú|ý|ắ|ấ|ế|ố|ớ|ứ')).astype(int)
+text_df['tone_3'] = (text_df['word'].str.contains('à|è|ì|ò|ù|ỳ|ằ|ầ|ề|ồ|ờ|ừ')).astype(int)
+text_df['tone_4'] = (text_df['word'].str.contains('ả|ẻ|ỉ|ỏ|ủ|ỷ|ẳ|ẩ|ể|ổ|ở|ử')).astype(int)
+text_df['tone_5'] = (text_df['word'].str.contains('ã|ẽ|ĩ|õ|ũ|ỹ|ẵ|ẫ|ễ|ỗ|ỡ|ữ')).astype(int)
+text_df['tone_6'] = (text_df['word'].str.contains('ạ|ặ|ậ|ẹ|ệ|ị|ọ|ộ|ợ|ụ|ự|ỵ')).astype(int)
+text_df['tone_1'] = (text_df[['tone_2', 'tone_3', 'tone_4', 'tone_5', 'tone_6']].any(axis=1)==False).astype(int)
+f0_df.rename(columns={0:'index'}, inplace=True)
+result_df = f0_df.merge(text_df[['index','tone_1', 'tone_2', 'tone_3', 'tone_4', 'tone_5', 'tone_6']], how='left', left_on='index', right_on='index')
+result_df['tone_digit'] = result_df[['tone_1', 'tone_2', 'tone_3', 'tone_4', 'tone_5', 'tone_6']].apply(get_tone_digit, axis=1)
 
-  Args:
-    filename: Path to save the file to.
-    wav_data: 2D array of float PCM-encoded audio data.
-    sample_rate: Samples per second to encode in the file.
-  """
-  with tf.Session(graph=tf.Graph()) as sess:
-    wav_filename_placeholder = tf.placeholder(tf.string, [])
-    sample_rate_placeholder = tf.placeholder(tf.int32, [])
-    wav_data_placeholder = tf.placeholder(tf.float32, [None, 1])
-    wav_encoder = contrib_audio.encode_wav(wav_data_placeholder,
-                                           sample_rate_placeholder)
-    wav_saver = io_ops.write_file(wav_filename_placeholder, wav_encoder)
-    sess.run(
-        wav_saver,
-        feed_dict={
-            wav_filename_placeholder: filename,
-            sample_rate_placeholder: sample_rate,
-            wav_data_placeholder: np.reshape(wav_data, (-1, 1))
-        })
+def get_train_and_test_dataframes(source_df: pd.DataFrame, proportion_test: float) ->Tuple[pd.DataFrame, pd.DataFrame]:
+    test_df = source_df.groupby('tone_digit', group_keys=False).apply(lambda x: 
+                                                                        x.sample(
+                                                                            int(
+                                                                                np.rint(
+                                                                                    len(source_df)*proportion_test*len(x)/len(source_df)
+                                                                                )
+                                                                            )
+                                                                        )
+                                                                       ).sample(frac=1).reset_index(drop=True)
+    train_df = source_df[~source_df.index.isin(test_df.index)]
+    return train_df, test_df
+
+num_samples = 20
+train_df, test_df = get_train_and_test_dataframes(result_df, 0.1)
+
+audio_clip_sample_length = len(train_df.columns) - 7 - 1
 
 
+model = tf.keras.Sequential([
+    tf.keras.layers.Input(shape=(580,1), batch_size=num_samples),
+    tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(num_samples)),
+    tf.keras.layers.Dense(64, activation='relu'),
+    tf.keras.layers.Dense(6, activation='sigmoid')
+])
 
-text = pickle.load(open("Data Sources/arpatext.pkl", 'rb'))
-random.seed()
-train=[]
-test=[]
-validate=[]
-trainlabels=[]
-filename=[]
-for val in range(1, 2200):
-	value0=random.random()
-	if value0 <= 0.1:
-		test.append(val)
-	elif value0 <= 0.9:
-		train.append(val)
-		trainlabels.append(text[val][-1])
-		filename.append("Data Sources/Audio2-0/Audio2-"+str(val).zfill(2)+".wav")
-	else:
-		validate.append(val)
+model.compile(loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
+              optimizer=tf.keras.optimizers.Adam(1e-4),
+              metrics=['accuracy'])
 
+history = model.fit(train_df.iloc[:num_samples * (len(train_df)//num_samples), 1:-7].fillna(result_df.iloc[:num_samples * (len(train_df)//num_samples), 1:-7].mean()).to_numpy()[..., np.newaxis], 
+                    train_df.iloc[:num_samples * (len(train_df)//num_samples), -7:-1].to_numpy(), epochs=10,
+                   batch_size=num_samples)
+_, test_acc = model.evaluate(test_df.iloc[:num_samples * (len(test_df)//num_samples), 1:-7].fillna(test_df.iloc[:num_samples * (len(test_df)//num_samples), 1:-7].mean()).to_numpy()[..., np.newaxis],
+                                     test_df.iloc[:num_samples * (len(test_df)//num_samples), -7:-1].to_numpy(), batch_size=num_samples)
 
-
-biggest=0
-
-for number in range(0, len(train)):
-	audiofile=load_wav_file("Data Sources/Audio2-0/Audio2-"+str(train[number]+1).zfill(2)+".wav")
-	if len(audiofile)>biggest:
-		biggest=len(audiofile)
-for number in range(0, len(train)):
-	audiofile=load_wav_file("Data Sources/Audio2-0/Audio2-"+str(train[number]+1).zfill(2)+".wav")
-	if len(audiofile)<biggest:
-		audiofile.resize(biggest)
-	save_wav_file("Data Sources/Audio2-0/Audio2-"+str(train[number]).zfill(2)+".wav", audiofile, 44100)
-length_in_ms=biggest/44100.*1000
-number_cells=int((length_in_ms-550)/5)
-
-tf.logging.set_verbosity(tf.logging.INFO)
-mfccPlaceholder=tf.placeholder(tf.float32)
-
-labelsMatrix=np.zeros((len(train), 6))
-for val in range(0, len(train)):
-	labelsMatrix[val][int(trainlabels[val])-1]=1
-
-lstm=tf.contrib.rnn.BasicLSTMCell(281*20)
-output, state=tf.nn.static_rnn(lstm, [tf.reshape(mfccPlaceholder, [len(filename), 281*20])], dtype=tf.float32)
-
-labelsTensor=tf.placeholder(tf.float32)
-
-weights = tf.Variable(tf.random_normal([281*20, 6]))
-biases = tf.Variable(tf.random_normal([6]))
-model = tf.matmul(output[-1], weights) + biases
-loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=model, labels=labelsTensor))
-saver = tf.train.Saver([weights, biases])
-optimizer = tf.train.AdagradOptimizer(0.1).minimize(loss)
-check = tf.equal(tf.argmax(model, 1), tf.argmax(labelsTensor, 1))
-correct = tf.reduce_sum(tf.cast(check, tf.float32))
-
-
-with tf.Session() as sess:
-	sess.run(tf.global_variables_initializer())
-    
-	step = 0
-	num_correct = 0.
-	accuracy = 0.
-	mfccarray=[]
-	for i in range(0, len(train)):
-		mfcc=getMFCC(filename[i])
-		mfccarray.append(mfcc)
-	while step < 20000:
-		_, corr = sess.run([optimizer, correct],
-			feed_dict={mfccPlaceholder: mfccarray, labelsTensor: labelsMatrix})
-		num_correct += corr
-		accuracy = 100*num_correct/(len(train))
-		if step % 100 == 0 or step<100:
-			print 'Step', step, '- Accuracy =', accuracy
-		num_correct = 0
-		step += 1
-	saver.save(sess, os.getcwd()+"/output")
+print('Test Accuracy: {}'.format(test_acc))
